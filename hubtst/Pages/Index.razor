@@ -1,0 +1,125 @@
+﻿@page "/"
+@using Microsoft.AspNetCore.SignalR.Client
+@implements IDisposable
+@inject IConfiguration Conf
+
+<PageTitle>Simple Chat</PageTitle>
+
+User:<input type="text" @bind="UserName" disabled="@UserDisabled" />&nbsp;<button class="btn btn-primary" @onclick="btnConnect_Click" disabled="@LoginDisabled">@btnFace</button><br/>
+Message:<input type="text" @bind="Message"/>&nbsp;<button class="btn btn-primary" @onclick="btnSend_Click" disabled="@SendDisabled">送信</button><br/>
+<button class="btn btn-success" @onclick="btnListUser_Click" disabled="@SendDisabled">ユーザー一覧取得</button><br/>
+<br/><br/>
+<div style="width:75vw;height:50vh;overflow:scroll;border-style:solid;border-color:darkgray;border-width:1px;">
+<pre>@((MarkupString)Logs)</pre>
+</div>
+
+@code {
+
+    protected string UserName = null!;
+    protected string Logs = null!;
+    protected string Message = null!;
+    protected bool UserDisabled = false;
+    protected bool LoginDisabled = false;
+    protected bool SendDisabled = true;
+    protected string btnFace = "ログオン";
+    private HubConnection con = null!;
+    /// <summary>
+    /// 初期化処理
+    ///     HUBへの接続情報,受信メッセージハンドラ設定およびHUBへの接続を行う
+    /// </summary>
+    protected override void OnInitialized()  {
+
+        HubConnectionBuilder blder = new HubConnectionBuilder();
+        string url = Conf.GetValue<string>("HubUrl");
+        con = blder.WithUrl(url)
+                            .Build();
+        // メッセージハンドラ設定
+        con.On<string,string,string>(   // メッセージ受信
+            nameof(IHubTstClientFunctions.ReceiveMessage),
+            async (user,mesg,color) => {
+                Logs += $"<span style='font-weight:bold;color:{color}'>{user}</span>:{mesg}\n";
+                await InvokeAsync(()=>StateHasChanged());
+            }
+        );
+        con.On<UserInfo>(   // Logonメッセージ受信
+            nameof(IHubTstClientFunctions.LogOnMessage),
+            async (user) => {
+                Logs += $"<span style='font-weight:bold;color:{user.Color}'>{user.UserName}</span>さんが入室しました。\n";
+                await InvokeAsync(()=>StateHasChanged());
+            }
+        );
+        con.On<UserInfo>(   // Logoffメッセージ受信
+            nameof(IHubTstClientFunctions.LogOffMessage),
+            async (user) => {
+                Logs += $"<span style='font-weight:bold;color:{user.Color}'>{user.UserName}</span>さんが退室しました。\n";
+                await InvokeAsync(()=>StateHasChanged());
+            }
+        );
+        con.On<List<UserInfo>>( // ログイン済みユーザー一覧受信
+            nameof(IHubTstClientFunctions.UserListResult),
+            async (users) => {
+                Logs += "ログインしているユーザー一覧\n";
+                foreach(var u in users) {
+                    Logs += $"<span style='font-weight:bold;color:{u.Color}'>{u.UserName}</span>さん\n";
+                }
+                await InvokeAsync(()=>StateHasChanged());
+            }
+        );
+        con.On<string>( // サーバーメッセージ受信
+            nameof(IHubTstClientFunctions.ServerMessage),
+            async (msg) => {
+                Logs += $"サーバーからのメッセージ：{msg}\n";
+                await InvokeAsync(()=>StateHasChanged());
+            }
+        );
+    }
+    /// <summary>
+    /// LognOn/LogOff
+    /// </summary>
+    /// <returns></returns>
+    protected async Task btnConnect_Click() {
+        if (btnFace == "ログオン") {
+            try {
+                await con.StartAsync();
+            } catch (Exception e) {
+                Message = $"接続に失敗しました\n{e.Message}";
+                return;
+            }
+            await con.SendAsync(nameof(IHubTstServerFunctions.LogOn),UserName);
+            UserDisabled = true;
+            //LoginDisabled = true;
+            btnFace = "ログオフ";
+            SendDisabled = false;
+        } else {
+            await con.SendAsync(nameof(IHubTstServerFunctions.LogOff));
+            UserDisabled = false;
+            //LoginDisabled = true;
+            btnFace = "ログオン";
+            SendDisabled = true;
+            await con.StopAsync();
+        }
+    }
+    /// <summary>
+    /// メッセージ送信
+    /// </summary>
+    /// <returns></returns>
+    protected async Task btnSend_Click() {
+        await con.SendAsync(nameof(IHubTstServerFunctions.SendMessage),UserName,Message);
+    }
+    /// <summary>
+    /// ユーザー一覧取得
+    /// </summary>
+    /// <returns></returns>
+    protected async Task btnListUser_Click() {
+        await con.SendAsync(nameof(IHubTstServerFunctions.UserList));
+    }
+    /// <summary>
+    /// ページ破棄時の処理
+    /// </summary>
+    public void Dispose() {
+        if (con != null && con.State == HubConnectionState.Connected) {
+            con.StopAsync();
+        }
+    }
+}
+
